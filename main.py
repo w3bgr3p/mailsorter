@@ -1,120 +1,190 @@
 import os
 import json
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
-from telegram import Chat
 import logging
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from settings import TOKEN, SCAN_CHANNEL_ID, NOTIFICATION_CHAT_ID
 
-# Путь к файлу для сохранения словаря
-FILE_PATH = "keywords_data.json"
-SECONDARY_FILE_PATH = "secondary_keywords_data.json"
+# Пути к файлам для сохранения словарей
+ALERTS_FILE_PATH = "alerts.json"
+ADDRESSES_FILE_PATH = "addresses.json"
 
-
-
-# Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.INFO)
-
+# Настройка логирования
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-keywords = set()
-
-def load_keywords():
-    """Загрузка словаря из файла."""
+# Загрузка данных
+def load_data(file_path):
+    """Загрузка данных из файла."""
     try:
-        with open(FILE_PATH, 'r') as file:
+        with open(file_path, 'r') as file:
             data = json.load(file)
             return {k: set(v) for k, v in data.items()}
     except (json.JSONDecodeError, FileNotFoundError):
-        print("Ошибка при чтении файла или файл не найден. Используется пустой словарь.")
+        logger.warning(f"Ошибка при чтении {file_path}. Используется пустой словарь.")
         return {}
 
+def save_data(data, file_path):
+    """Сохранение данных в файл."""
+    with open(file_path, 'w') as file:
+        json.dump({k: list(v) for k, v in data.items()}, file)
 
-def load_secondary_keywords():
-    """Загрузка второго словаря из файла."""
-    try:
-        with open(SECONDARY_FILE_PATH, 'r') as file:
-            data = json.load(file)
-            return {k: set(v) for k, v in data.items()}
-    except (json.JSONDecodeError, FileNotFoundError):
-        print("Ошибка при чтении второго файла или файл не найден. Используется пустой словарь.")
-        return {}
+# Загрузка словарей при запуске
+alerts_dict = load_data(ALERTS_FILE_PATH)
+addresses_dict = load_data(ADDRESSES_FILE_PATH)
 
+def check_args_length(update, expected_length):
+    """Проверяет количество аргументов в команде."""
+    if len(update.message.text.split()) < expected_length:
+        update.message.reply_text("Недостаточно аргументов для этой команды.")
+        return False
+    return True
 
-# Загрузка словаря из файла при запуске
-keywords_dict = load_keywords()
-secondary_keywords_dict = load_secondary_keywords()  # Загрузим второй словарь аналогичным образом
-
-
-
-def save_keywords():
-    """Сохранение словаря в файл."""
-    # Преобразование множеств в списки для сохранения в JSON
-    with open(FILE_PATH, 'w') as file:
-        json.dump({k: list(v) for k, v in keywords_dict.items()}, file)
-
-def save_secondary_keywords():
-    """Сохранение второго словаря в файл."""
-    with open(SECONDARY_FILE_PATH, 'w') as file:
-        json.dump({k: list(v) for k, v in secondary_keywords_dict.items()}, file)
+def unknown_command(update, context):
+    """Обработчик неизвестных команд."""
+    update.message.reply_text("Неизвестная команда. Введите /help для просмотра доступных команд.")
 
 
+
+# Команды бота
 def start(update, context):
-    commands = """
-    /start - Запуск бота.
-    /add_keyword <ключ> <значение1> <значение2> ... - Добавление ключевых слов в первый словарь.
-    /add_secondary_keyword <ключ> <значение1> <значение2> ... - Добавление ключевых слов во второй словарь.
-    /help - Вывод мануала.
-    """
-    update.message.reply_text(commands)
+    commands = [
+        "/add_v <alrt/addr> <ключ> <значение1> ... - Добавить значения",
+        "/edit_v <alrt/addr> <ключ> <значение1> ... - Редактировать значения",
+        "/rm_v <alrt/addr> <ключ> <значение1> ... - Удалить значения",
+        "/rm_k <alrt/addr> <ключ> - Удалить ключ",
+        "/help - Подробный хелп"
+    ]
+    update.message.reply_text("\n".join(commands))
 
-def help_command(update, context):
-    with open("readme.txt", "r",encoding="utf-8") as file:
-        manual = file.read()
-    update.message.reply_text(manual)
+def add_value(update, context):
+    """Добавление значений к существующему ключу в выбранном словаре."""
+    if not context.args or context.args[0] not in ["alrt", "addr"]:
+        update.message.reply_text("Неверный аргумент. Используйте 'alrt' или 'addr'.")
+        return
+
+    dictionary_type = context.args[0]
+    key = context.args[1]
+    values = context.args[2:]
+
+    if dictionary_type == "alrt":
+        target_dict = alerts_dict
+        file_path = ALERTS_FILE_PATH
+    else:
+        target_dict = addresses_dict
+        file_path = ADDRESSES_FILE_PATH
+
+    if key not in target_dict:
+        target_dict[key] = set()
+    target_dict[key].update(values)
+    save_data(target_dict, file_path)
+    update.message.reply_text(f"Ключ '{key}' обновлен с значениями: {', '.join(values)}.")
 
 
-def add_keyword(update, context):
-    keyword, *values = update.message.text.split()[1:]
-    if keyword not in keywords_dict:
-        keywords_dict[keyword] = set()
-    keywords_dict[keyword].update(values)
-    save_keywords()
-    update.message.reply_text(f"Ключ '{keyword}' добавлен с значениями: {', '.join(values)}.")
-    
-def add_secondary_keyword(update, context):
-    keyword, *values = update.message.text.split()[1:]
-    if keyword not in secondary_keywords_dict:
-        secondary_keywords_dict[keyword] = set()
-    secondary_keywords_dict[keyword].update(values)
-    save_secondary_keywords()
-    update.message.reply_text(f"Во второй словарь добавлен ключ '{keyword}' с значениями: {', '.join(values)}.")
+def edit_value(update, context):
+    dictionary, key, *new_values = update.message.text.split()[1:]
+    target_dict = alerts_dict if dictionary == "alrt" else addresses_dict
+    target_dict[key] = set(new_values)
+    save_data(target_dict, ALERTS_FILE_PATH if dictionary == "alrt" else ADDRESSES_FILE_PATH)
+    update.message.reply_text(f"Значения для ключа '{key}' обновлены.")
+
+def remove_value(update, context):
+    if not check_args_length(update, 3):  # Минимальное количество аргументов: /rm_v alrt ключ
+        return
+
+    dictionary, key, *values_to_remove = update.message.text.split()[1:]
+    target_dict = alerts_dict if dictionary == "alrt" else addresses_dict
+    if key not in target_dict:
+        update.message.reply_text(f"Ключ '{key}' не найден.")
+        return
+    removed_values = target_dict[key].intersection(values_to_remove)
+    if not removed_values:
+        update.message.reply_text(f"Значения {', '.join(values_to_remove)} не найдены для ключа '{key}'.")
+        return
+    target_dict[key] -= removed_values
+    save_data(target_dict, ALERTS_FILE_PATH if dictionary == "alrt" else ADDRESSES_FILE_PATH)
+    update.message.reply_text(f"Значения {', '.join(removed_values)} удалены из ключа '{key}'.")
+
+def remove_key(update, context):
+    if not check_args_length(update, 3):  # Минимальное количество аргументов: /rm_k alrt ключ
+        return
+    dictionary, key = update.message.text.split()[1:3]
+    target_dict = alerts_dict if dictionary == "alrt" else addresses_dict
+    if key not in target_dict:
+        update.message.reply_text(f"Ключ '{key}' не найден.")
+        return
+    target_dict.pop(key, None)
+    save_data(target_dict, ALERTS_FILE_PATH if dictionary == "alrt" else ADDRESSES_FILE_PATH)
+    update.message.reply_text(f"Ключ '{key}' удален.")
+
+def view_dictionaries(update, context):
+    """Вывод содержимого выбранного словаря или обоих словарей."""
+    response = []
+    args = update.message.text.split()
+
+    if len(args) > 1:
+        dictionary = args[1]
+        if dictionary == "alrt":
+            if not alerts_dict:
+                response.append("Словарь alerts пуст.")
+            else:
+                for key, values in alerts_dict.items():
+                    response.append(f"{key}: {', '.join(values)}")
+        elif dictionary == "addr":
+            if not addresses_dict:
+                response.append("Словарь addresses пуст.")
+            else:
+                for key, values in addresses_dict.items():
+                    response.append(f"{key}: {', '.join(values)}")
+        else:
+            response.append("Неизвестный аргумент. Используйте 'alrt' или 'addr'.")
+    else:
+        # Вывод содержимого обоих словарей, если аргументы не указаны
+        response.append("Alerts:")
+        if not alerts_dict:
+            response.append("Словарь alerts пуст.")
+        else:
+            for key, values in alerts_dict.items():
+                response.append(f"{key}: {', '.join(values)}")
+
+        response.append("\nAddresses:")
+        if not addresses_dict:
+            response.append("Словарь addresses пуст.")
+        else:
+            for key, values in addresses_dict.items():
+                response.append(f"{key}: {', '.join(values)}")
+
+    update.message.reply_text("\n".join(response))
+
 
 
 def handle_message(update, context):
     if update.channel_post:
-        message_text = update.channel_post.text
-
-        # Поиск ключевых слов из первого словаря
-        found_primary_keywords = [keyword for keyword, values in keywords_dict.items() if any(value in message_text for value in values)]
-
-        # Поиск ключевых слов из второго словаря
-        found_secondary_keywords = [keyword for keyword, values in secondary_keywords_dict.items() if any(value in message_text for value in values)]
-
-        if found_primary_keywords or found_secondary_keywords:
-            response = " ".join(found_primary_keywords) + " : " + " ".join(found_secondary_keywords) + "\n" + update.channel_post.link
+        message = update.channel_post
+        found_alerts = [key for key, values in alerts_dict.items() if any(value in message.text for value in values)]
+        found_addresses = [key for key, values in addresses_dict.items() if any(value in message.text for value in values)]
+        if found_alerts or found_addresses:
+            response = " ".join(found_alerts) + " : " + " ".join(found_addresses) + "\n" + message.link
             context.bot.send_message(chat_id=NOTIFICATION_CHAT_ID, text=response)
 
-
+def help_command(update, context):
+    """Отправляет инструкции по использованию бота."""
+    with open("readme.txt", "r",encoding="utf-8") as file:
+        instructions = file.read()
+    update.message.reply_text(instructions)
+    
 def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("add_keyword", add_keyword))
-    dp.add_handler(CommandHandler("add_secondary_keyword", add_secondary_keyword))
-    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("help", help_command)) 
+    dp.add_handler(CommandHandler("add_v", add_value))
+    dp.add_handler(CommandHandler("edit_v", edit_value))
+    dp.add_handler(CommandHandler("rm_v", remove_value))
+    dp.add_handler(CommandHandler("rm_k", remove_key))
+    dp.add_handler(CommandHandler("view", view_dictionaries))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    dp.add_handler(MessageHandler(Filters.command, unknown_command))
 
     updater.start_polling()
     updater.idle()
